@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>dev.sbomguard</groupId>
+  <artifactId>sbomguard</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <name>sbomguard</name>
+  <description>CLI de segurança de cadeia de suprimentos: SBOM (CycloneDX),
+    manifesto de integridade, assinatura Ed25519 e verificação para pipelines CI/CD.</description>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>21</maven.compiler.release>
+
+    <!-- Versões PINADAS e verificadas no Maven Central em 2026-09-10 -->
+    <picocli.version>4.7.7</picocli.version>
+    <jackson-bom.version>2.22.2</jackson-bom.version>
+    <cyclonedx-core-java.version>13.2.0</cyclonedx-core-java.version>
+    <maven-model.version>3.9.16</maven-model.version>
+    <junit-bom.version>6.1.3</junit-bom.version>
+
+    <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
+    <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- BOMs: uma única fonte de verdade para famílias de artefatos -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit-bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson-bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- FASE 1: framework CLI (zero dependências transitivas) -->
+    <dependency>
+      <groupId>info.picocli</groupId>
+      <artifactId>picocli</artifactId>
+      <version>${picocli.version}</version>
+    </dependency>
+
+    <!-- FASE 3: leitura de pom.xml de projetos escaneados (MavenXpp3Reader) -->
+    <dependency>
+      <groupId>org.apache.maven</groupId>
+      <artifactId>maven-model</artifactId>
+      <version>${maven-model.version}</version>
+    </dependency>
+
+    <!-- FASE 4: geração e validação por schema de SBOMs CycloneDX (OWASP) -->
+    <dependency>
+      <groupId>org.cyclonedx</groupId>
+      <artifactId>cyclonedx-core-java</artifactId>
+      <version>${cyclonedx-core-java.version}</version>
+    </dependency>
+
+    <!-- FASE 5: serialização JSON do manifesto de integridade -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <!-- FASE 2/6: criptografia SEM dependências externas.
+         SHA-256 (MessageDigest) e Ed25519 (KeyPairGenerator/Signature) são nativos do JDK. -->
+
+    <!-- Testes (não embarcam no artefato final) -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>${maven-compiler-plugin.version}</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${maven-surefire-plugin.version}</version>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

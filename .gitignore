@@ -1,0 +1,28 @@
+# Build
+target/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+nbproject/private/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Logs e crash dumps da JVM
+*.log
+hs_err_pid*
+replay_pid*
+
+# Chaves e segredos (FASE 6): NUNCA commitar material de chave privada.
+# Chaves PÚBLICAS (.pub) e manifests assinados PODEM ser commitados.
+*.pem
+*.key
+*.p12
+*.jks
+secrets/
