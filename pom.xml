@@ -23,6 +23,7 @@
     <jackson-bom.version>2.22.2</jackson-bom.version>
     <cyclonedx-core-java.version>13.2.0</cyclonedx-core-java.version>
     <maven-model.version>3.9.16</maven-model.version>
+    <packageurl-java.version>1.5.0</packageurl-java.version>
     <junit-bom.version>6.1.3</junit-bom.version>
 
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
@@ -62,6 +63,13 @@
       <groupId>org.apache.maven</groupId>
       <artifactId>maven-model</artifactId>
       <version>${maven-model.version}</version>
+    </dependency>
+
+    <!-- FASE 3: purl (pkg:maven/...) — direta porque usamos direto (já era transitiva do cyclonedx) -->
+    <dependency>
+      <groupId>com.github.package-url</groupId>
+      <artifactId>packageurl-java</artifactId>
+      <version>${packageurl-java.version}</version>
     </dependency>
 
     <!-- FASE 4: geração e validação por schema de SBOMs CycloneDX (OWASP) -->
