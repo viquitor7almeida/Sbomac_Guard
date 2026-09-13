@@ -1,0 +1,414 @@
+================================================================================
+ SBOMGUARD — GUIA DE CAMPO TÉCNICO
+ Como funciona, para que existe, como é feito — voltado à compreensão do código
+================================================================================
+
+1. PARA QUE EXISTE
+=================
+
+O SBOMGuard é uma CLI de segurança de cadeia de suprimentos de software.
+O problema que ataca: um build pode ter dependências, artefatos e declarações
+trocados ou adulterados entre o momento em que você aprovou o estado e o
+momento em que o software roda — e nada na esteira grita "isto mudou".
+
+A tese da ferramenta é separar quatro garantias que o mercado costuma
+misturar, e implementar cada uma com o mecanismo correto:
+
+  INTEGRIDADE     "este arquivo é o mesmo de antes?"       -> hash SHA-256
+  AUTENTICIDADE   "quem afirma que está tudo igual?"       -> assinatura Ed25519
+  PROVENIÊNCIA    "do que este software é feito?"          -> SBOM CycloneDX + manifesto
+  AUDITORIA       "o que foi atestado ao longo do tempo?"  -> ledger + âncora
+
+O que o SBOMGuard NÃO é (e nunca promete): antivírus. Ele DETECTA ALTERAÇÃO,
+não detecta malícia. Um componente malicioso registrado, assinado e hasheado
+ANTES do ataque verifica com sucesso. A ferramenta atesta estado e
+identidade, não intenção. Também não protege um ambiente totalmente
+comprometido: se a máquina que executa o verify mente, ou se a chave privada
+vaza, não existe detecção possível por dentro do modelo.
+
+2. MODELO DE CONFIANÇA
+======================
+
+A raiz de confiança é a CHAVE PRIVADA Ed25519. Tudo deriva dela:
+
+  - quem tem a privada pode produzir manifestos válidos (assinar);
+  - quem tem a pública (qualquer um — ela é pública e committável) só verifica;
+  - da pública não se deriva a privada (logaritmo discreto na curva
+    edwards25519 — computacionalmente inviável).
+
+Dois limites estruturais, documentados desde o primeiro dia:
+
+  a) BOOTSTRAP: a ferramenta verifica a AUTENTICIDADE da chave pública e da
+     âncora, mas não sabe DE ONDE você as obteve. Uma chave pública pinnada
+     num local comprometido encerra o jogo.
+
+  b) ORACLE: o registro (manifesto, ledger, âncora) prova que um estado foi
+     publicado — não que o estado era legítimo. Quem escreve é o elo de
+     confiança; o registro é a testemunha.
+
+3. ARQUITETURA — PACOTE A PACOTE
+================================
+
+O código mora em dev.sbomguard/, organizado por responsabilidade. A regra de
+camadas é estrita: crypto/scanner/sbom/manifest/verification/ledger/policy
+NÃO conhecem picocli; a CLI é casca fina sobre serviços puros — por isso o
+motor de verificação roda inteiro dentro dos testes, sem terminal.
+
+  SbomGuardCli (raiz)
+    Comando raiz. Detalhe que importa: configuredCommandLine() é a FÁBRICA
+    ÚNICA de configuração — usada por main() E pelos testes, garantindo que
+    os testes exercitam exatamente o caminho de produção (mesmos handlers
+    de exceção, mesmos exit codes). System.exit() existe SÓ aqui: código de
+    biblioteca retorna, o ponto de entrada decide sair.
+
+  cli/ — superfície e contrato
+    ExitCodes      constantes 0/1/2/10/11/12/13. Classe de contrato: final,
+                   construtor privado que lança. O teste
+                   contratoDeExitCodesEhEstavel pina os valores numéricos:
+                   exit code de segurança não muda por acidente.
+    *Command       um por comando (hash, scan, sbom, attest, keygen, sign,
+                   verify, ledger, anchor). Sem lógica de negócio: traduzem
+                   entrada em chamada de serviço e resultado em
+                   stdout/stderr/exit code. Convenções fixas: dados em
+                   stdout, diagnósticos e avisos em stderr; falha parcial
+                   NUNCA produz exit 0 (fail-closed).
+
+  crypto/ — primitivas, 100% JDK (zero dependência criptográfica externa)
+    HashService     SHA-256 em stream (chunks de 8 KiB: memória constante
+                    para arquivo de qualquer tamanho). Cada chamada cria seu
+                    próprio MessageDigest porque a classe NÃO é thread-safe
+                    (carrega o bloco parcial entre updates); sem estado
+                    compartilhado = sem condição de corrida, sem lock.
+                    digest.update(chunk, 0, read): o "read" importa — o
+                    último chunk é parcial, e hashear o buffer inteiro
+                    corromperia todo arquivo não múltiplo de 8192.
+    KeyService      ciclo de vida Ed25519: geração, PEM PKCS#8 (privada,
+                    gravada rw-------) e X.509 (pública, committável), parse
+                    ESTRITO (header, base64, e KeyFactory rejeita chaves de
+                    outro algoritmo — há teste com RSA travestido), e
+                    fingerprint = SHA-256 dos bytes X.509 da pública.
+    SignatureService sign/verify Ed25519 (assinatura de exatamente 64 bytes,
+                    determinística por RFC 8032). O CONTRATO central: verify()
+                    devolve FALSE para assinatura inválida — resultado de
+                    segurança, nunca exceção. Assinatura truncada é assinatura
+                    INVÁLIDA (exit 11), não bug da ferramenta (exit 1).
+                    Exceção só para falha operacional (chave ruim).
+    SignatureEnvelope o arquivo .sig é autodescritivo: algorithm, keyId,
+                    signatureBase64. Algoritmo desconhecido é REJEITADO (não
+                    ignorado). keyId = fingerprint, DENTRO do conteúdo
+                    assinado: não se troca sem quebrar a assinatura.
+    CryptoException falha OPERACIONAL apenas. "Assinatura inválida" nunca é
+                    exceção — é false.
+
+  scanner/ — descoberta (inventário, nunca verificação)
+    Component       record imutável: type/groupId/name/version/scope/purl/
+                    path. A regra de honestidade do modelo inteiro: campo
+                    nulo documentado é melhor que campo fabricado.
+                    FILE_ARTIFACT não tem purl (arquivo não carrega metadado
+                    de ecossistema); MAVEN_DEPENDENCY não tem path (nunca foi
+                    resolvida). Não se inventa dado.
+    MavenPomScanner pom.xml -> componentes com o MESMO parser do Maven
+                    (MavenXpp3Reader modo strict: XML malformado dispara,
+                    não silêncio). Xpp3 não é JAXP: imune a XXE por
+                    construção. Lê o pom DECLARADO: sem resolução de
+                    propriedades/BOMs/perfis/transitivas (limitação
+                    documentada — versão "${...}" fica crua e o purl sai SEM
+                    versão, porque placeholder não é versão).
+    DirectoryScanner walkFileTree SEM seguir symlinks (política: symlink é
+                    pulado e reportado — link para fora do projeto não vira
+                    item de inventário). Exclusões por subárvore: .git,
+                    target, .idea, .vscode, node_modules. Saída ORDENADA
+                    (determinismo: dois scans do mesmo estado dão a mesma
+                    lista — requisito de manifesto reproduzível).
+    ProjectScanner  orquestra e define POLÍTICA (os scanners são mecanismo):
+                    pom malformado NÃO aborta o scan — pulado e reportado
+                    (inventário é skip+warn; hard-fail pertence à
+                    verificação). Caminhos relativos à raiz (manifesto
+                    portátil, sem máquina embutida). Dedup de dependências
+                    por purl. ScanResult.subject(): pom da raiz (ou primeiro
+                    por caminho) — regra Única, consumida por SBOM e
+                    manifesto.
+
+  sbom/ — proveniência
+    SbomGenerator   ScanResult -> CycloneDX 1.6 JSON, validado contra o
+                    schema OFICIAL embutido na lib ANTES de emitir (a
+                    ferramenta nunca coloca em circulação um SBOM que ela
+                    mesma não validaria). Hash apenas em artefatos medidos;
+                    escopo Maven mapeado à semântica CycloneDX (test ->
+                    excluded, provided/system -> optional, compile/runtime ->
+                    required); SEM grafo de dependências fabricado
+                    (declarado não é resolvido).
+
+  manifest/ — o atestado
+    Manifest        record raiz: schemaVersion(=1)/created/tool/subject/sbom/
+                    components. Caminhos são STRING relativa: resolução no
+                    USO (root.resolve), jamais contra o CWD de quem lê (o
+                    desserializador de Path do Jackson resolve contra o
+                    diretório de trabalho do LEITOR — armadilha de
+                    portabilidade que o teste de round-trip expôs).
+    ManifestComponent sha256 existe SÓ onde foi medido (pom, artefato).
+                    Dependência declarada carrega identidade (purl) sem hash
+                    — é o que permite detectar dependência inesperada por
+                    diferença de conjunto (exit 12). version guarda o valor
+                    CRU ("${...}" incluso): o manifesto registra estado
+                    DECLARADO (testemunha), ao contrário do SBOM, que omite
+                    placeholder (vitrine para consumidores externos).
+    ManifestBuilder cobertura de hash: pom do sujeito (adulterar a declaração
+                    de dependências fica detectável), poms de módulos,
+                    artefatos de arquivo, e o ARQUIVO SBOM gravado (âncora
+                    manifest<->SBOM).
+    ManifestCodec   o ÚNICO ponto de configuração Jackson do manifesto:
+                    desserialização estrita (campo desconhecido = rejeição —
+                    a verificação lê manifests potencialmente adulterados),
+                    ZERO default typing (a superfície clássica de CVE do
+                    jackson-databind fechada por construção), NON_NULL
+                    (não-medido = ausente, não nulo). Round-trip byte-a-byte
+                    testado: a assinatura cobre BYTES.
+
+  verification/ — FATOS (não decide consequência)
+    VerificationEngine compara o estado atual (re-scan + re-medida) contra o
+                    manifesto atestado e devolve FINDINGS. Keyeamento por
+                    identidade: dependências por purl, poms/artefatos por
+                    caminho. Re-hash apenas onde o manifesto registrou
+                    medição. Kinds: HASH_DIVERGENTE, COMPONENTE_AUSENTE,
+                    COMPONENTE_INESPERADO, SBOM_DIVERGENTE, SBOM_AUSENTE.
+                    Detalhe de coerência: pom que virou ILEGÍVEL é pulado
+                    pelo scanner e surge como COMPONENTE_AUSENTE — a política
+                    de inventário atravessa até a verificação.
+
+  policy/ — CONSEQUÊNCIA
+    VerificationPolicy findings -> Veredito (APROVADO, INTEGRIDADE_
+                    COMPROMETIDA, COMPONENTE_INESPERADO). Camada de domínio:
+                    não conhece exit code (a CLI traduz). Precedência
+                    documentada: violar o que foi atestado (10) prevalece
+                    sobre componente inesperado (12) — "trocaram algo" é
+                    sinal mais forte que "sobrou algo".
+
+  ledger/ — memória e âncora
+    LedgerEntry     uma linha JSONL: index/created/keyId/subject/
+                    manifestSha256/prevHash/entryHash. entryHash = SHA-256
+                    da forma canônica (todos os campos menos entryHash,
+                    incluindo prevHash). Serialização compacta: uma entrada
+                    por linha, arquivo append-only.
+    LedgerService   APPEND recusa estender cadeia quebrada (anexar sobre
+                    adulteração legitima o estado anterior — anti-lavagem).
+                    VERIFY recalcula cada hash, confere encadeamento,
+                    sequência de índices e lixo no meio — e encadeia pelo
+                    hash RECALCULADO: a cadeia prova CONTEÚDO, o registrado
+                    é alegação; adulterar a entrada N denuncia N e N+1.
+                    Gênese = SHA-256 do vazio (e3b0c44298fc...): o vetor NIST
+                    do hashing virou âncora inicial, verificável por
+                    qualquer um. LIMITAÇÃO MATEMÁTICA (pinada em teste):
+                    reescrita TOTAL com hashes recalculados passa — a cadeia
+                    amarra as entradas ENTRE SI, não ao mundo exterior.
+    Anchor          checkpoint assinado: ledgerHead/entryCount/created/keyId/
+                    signatureBase64 — o padrão Signed Tree Head de
+                    Certificate Transparency/Rekor, offline e sem novas
+                    dependências. O valor mora na PUBLICAÇÃO EXTERNA.
+    AnchorService   create (recusa cadeia quebrada; assina o estado FINAL
+                    canonicalizado) e verify (assinatura da âncora, cadeia
+                    local, HEAD e CONTAGEM — truncamento não escapa porque
+                    uma cadeia consistentemente truncada mantém o head
+                    válido, mas não a contagem; ledger inexistente com
+                    âncora não-vazia = violação: deletar tudo deixou de ser
+                    caminho de fuga).
+
+  testkit/ — infraestrutura de teste
+    Fixtures        path() resolve recursos de teste; copy() cria cópia
+                    GRAVÁVEL de fixture (os testes de ataque alteram
+                    projetos sem tocar nos originais).
+
+4. CRIPTOGRAFIA — OS DETALHES QUE O CÓDIGO EMBUTE
+=================================================
+
+4.1 SHA-256 (integridade)
+  Garante: detecção de QUALQUER alteração prática. Avalanche é por BIT (~50%
+  dos 256 bits mudam); um dígito hex só coincide se seus 4 bits coincidirem
+  (p = 1/16) — daí ~60/64 dígitos distintos ao alterar 1 bit (o piso do
+  teste de avalanche é 48). NÃO garante autenticidade: hash não carrega
+  segredo; quem altera o arquivo recalcula o hash. Hash isolado detecta
+  ACIDENTE; adversário exige assinatura — por isso integridade e
+  autenticidade são camadas separadas no código.
+
+4.2 Ed25519 (autenticidade)
+  EdDSA sobre edwards25519 (RFC 8032), variante Schnorr. Chaves de 32 bytes;
+  PEM PKCS#8 de 48 bytes na privada, X.509 de 44 na pública; assinatura de
+  EXATAMENTE 64 bytes. DETERMINÍSTICO: mesma chave + mesmo conteúdo ->
+  mesmos 64 bytes (não existe nonce — elimina a classe de catástrofes do
+  ECDSA por nonce reusado/vazado). Assimetria: da pública não se deriva a
+  privada. Escolhido por: chaves/assinaturas minúsculas, verificação rápida,
+  sem gestão de nonce, e NATIVO do JDK desde 15 — zero dependência externa
+  numa ferramenta cujo produto é confiança.
+
+4.3 Formas canônicas (a disciplina que amarra tudo)
+  Assinatura cobre BYTES; portanto os bytes assinados e os bytes verificados
+  precisam ser IDÊNTICOS. Toda artefato assinável (manifesto, envelope,
+  entrada de ledger, âncora) tem uma forma canônica: serialização Jackson
+  compacta, ordem de declaração dos campos, NON_NULL, EXCLUINDO o campo de
+  assinatura/hash. Round-trip byte-a-byte é testado em cada codec. O bug
+  clássico que isso evita: assinar um estado e verificar outro (a âncora
+  chegou a assinar antes de estampar o campo created — o happy path do
+  teste pegou; o método-armadilha foi executado da existência).
+
+4.4 Hash chaining do ledger
+  entryHash_N = SHA-256(canônica da entrada N, que inclui prevHash da N-1).
+  Primeira entrada ancora na gênese (hash do vazio). Verificação encadeia
+  pelo RECALCULADO, não pelo registrado. O que detecta: edição (cascata),
+  remoção, reordenação, índice pulado, lixo no meio. O que NÃO detecta:
+  reescrita total consistente — resolvido pela camada seguinte.
+
+4.5 Âncora (a resposta à reescrita total)
+  Head + contagem, assinados, publicados FORA do alcance do atacante do
+  projeto. O atacante reescreve o ledger; não reescreve a âncora publicada
+  (release, repo de auditoria, transparency log). A CONTAGEM fecha o
+  truncamento; o head fecha a reescrita; a assinatura fecha a troca da
+  âncora; a fonte externa fecha o resto — até onde o bootstrap permitir.
+
+5. FORMATOS DOS ARTEFATOS (o que cada arquivo é)
+=================================================
+
+  sbomguard-signing.pem        chave privada Ed25519 (PKCS#8/PEM, 0600).
+                              NUNCA commitar — o .gitignore bloqueia *.pem.
+  sbomguard-signing.pub        chave pública (X.509/PEM). Committável:
+                              verificadores usam esta.
+  sbomguard.sbom.json          SBOM CycloneDX 1.6 (JSON), sujeito em
+                              metadata.component, componentes com purl e
+                              hashes onde medidos.
+  sbomguard.manifest.json      o atestado: schemaVersion, created, tool,
+                              subject (com hash do pom do projeto), sbom
+                              (nome + sha256 do arquivo SBOM), components
+                              (identidade + sha256 onde medido).
+  sbomguard.manifest.json.sig  envelope: algorithm (Ed25519), keyId
+                              (fingerprint), signatureBase64 (64 bytes).
+  sbomguard.ledger.jsonl       append-only, uma entrada por linha, chained.
+  sbomguard.anchor.json        checkpoint assinado: ledgerHead, entryCount,
+                              created, keyId, signatureBase64.
+
+  Convenções transversais: caminhos relativos à raiz do projeto (portável,
+  sem máquina embutida); dados ausentes são AUSENTES no JSON (NON_NULL) —
+  ausência é informação; desserialização estrita em tudo que é lido de volta
+  (campo desconhecido = rejeição).
+
+6. MOTOR DE VERIFICAÇÃO — SEMÂNTICA EXATA
+=========================================
+
+  Ordem das fases (decisão de segurança): AUTENTICIDADE antes de
+  INTEGRIDADE. Comparar conteúdo contra um manifesto não-autenticado é
+  exercício sem valor — baseline não-confiável. Assinatura falha -> 11,
+  sem comparação de conteúdo.
+
+  Comparação por identidade: dependências por purl; poms e artefatos por
+  caminho. Re-medida de hash apenas onde o manifesto registrou medição
+  (dependência declarada sem hash compara identidade — ausência de hash não
+  vira falso positivo).
+
+  Semântica dos códigos de segurança (simétrica e deliberada):
+    10 = o que o atestado cobre FALTOU ou DIVERGIU (hash, ausência, SBOM)
+    12 = SOBRA o que o atestado não cobre (dependência/artefato injetado)
+
+  Relatório: TODOS os findings são listados (uma passada, lista completa —
+  como sha256sum), exit code único reflete a violação de maior severidade
+  (10 > 12).
+
+7. CONTRATO DE EXIT CODES (a interface com CI/CD)
+==================================================
+
+  0   OK                    sucesso / verificação aprovada
+  1   GENERIC_ERROR         erro da ferramenta (IO, chave ruim, estado inválido)
+  2   INVALID_ARGUMENT      argumento inválido (parser ou validação manual)
+  10  INTEGRITY_VIOLATION   hash divergente, componente atestado ausente,
+                            SBOM divergente/ausente, ledger/âncora em conflito
+  11  SIGNATURE_INVALID     assinatura inválida ou ausente, algoritmo
+                            rejeitado, chave errada, âncora adulterada
+  12  UNEXPECTED_DEPENDENCY componente presente que o manifesto não atesta
+  13  MANIFEST_NOT_FOUND    manifesto esperado não existe
+
+  Distinção que o contrato carrega: 1-2 = "a ferramenta falhou, chame o
+  mantenedor"; 10-13 = "a ferramenta funcionou e o build deve ser BLOQUEADO".
+  Confluir os dois treina um time a ignorar código de segurança como ruído.
+
+8. INVARIANTES DE SEGURANÇA GRAVADAS NO CÓDIGO
+===============================================
+
+  1. Fail-closed em toda a superfície de verificação: nenhuma falha produz
+     exit 0. Sucesso é estado COMPROVADO, não ausência de erro.
+  2. Não se inventa dado: campo nulo documentado > campo fabricado (sem purl
+     para arquivo, sem hash para dependência não medida, sem versão para
+     placeholder).
+  3. Desserialização estrita de todo artefato lido de volta: campo
+     desconhecido = rejeição, não tolerância. A ferramenta lê arquivos que
+     atacantes podem ter tocado.
+  4. Assinatura sobre forma canônica, com round-trip byte-a-byte testado:
+     os bytes assinados SÃO os bytes verificados.
+  5. Autoverificação antes de emitir: SBOM é validado contra schema oficial
+     antes de gravar; assinatura recém-gerada é verificada antes de gravar;
+     âncora idem. A ferramenta nunca põe em circulação artefato que não
+     passaria no próprio critério.
+  6. Anti-lavagem: append e anchor RECUSAM estados quebrados (não se estende
+     nem se ancora mentira).
+  7. Resultado de segurança nunca é exceção: assinatura inválida é false
+     (exit 11), não stacktrace (exit 1).
+  8. Chave privada nunca vaza: 0600 em disco, bloqueada no .gitignore,
+     nunca impressa. Chave pública e âncora são feitas para circular.
+  9. Symlink nunca é seguido no inventário; diretórios de build (.git,
+     target, ...) podados por subárvore.
+ 10. Dados em stdout, diagnóstico em stderr — pipelines dependem disso.
+
+9. TESTES — A FILOSOFIA
+======================
+
+  145 testes, todos verdes via "mvn verify". O portfólio de ataques cobre:
+  bit-flip em artefato/manifesto/assinatura/ledger/SBOM, injeção de
+  dependência (nomeada no relatório), rogue JAR, remoção de componente,
+  chave errada, RSA travestido de Ed25519, algoritmo forjado no envelope,
+  truncamento de ledger (contagem), deleção total, e a REESCRIPTA TOTAL da
+  cadeia — duas vezes, de propósito:
+
+    - reescritaTotalDaCadeiaNaoEhDetectavelPelaCadeiaSozinha: PINA a
+      limitação (passa!) — é a prova viva de por que a âncora existe;
+    - reescritaTotalEDetectadaComAncora: o contraditório — a mesma
+      falsificação, pega pela âncora.
+
+  Teste que pinLimitação é ferramenta de documentação: quando a limitação
+  for fechada (ex.: âncora em transparency log público), é esse teste que
+  deve falhar e forçar a decisão consciente. Além disso: vetores NIST no
+  hash (verificados empiricamente contra sha256sum antes de virar teste),
+  oráculo externo (a saída do comando hash é consumível por "sha256sum -c"),
+  e determinismo de serialização em todos os codecs.
+
+10. DECISÕES-CHAVE E PORQUÊS (resumo executável)
+=================================================
+
+  - Criptografia 100% JDK: Ed25519 e SHA-256 nativos desde o Java 15/1.x;
+    zero BouncyCastle numa ferramenta cujo produto é confiança.
+  - Dependências mínimas e pinadas (16 jars em runtime): picocli (CLI, zero
+    transitivas), maven-model (o MESMO parser do Maven), packageurl-java
+    (purl), cyclonedx-core-java (OWASP; geração + validação por schema),
+    jackson (manifesto/codec). Nada entra sem justificativa de fase.
+  - Parser Xpp3 em vez de JAXP: imune a XXE ao ler pom hostil.
+  - Records + Jackson estrito: imutabilidade nos modelos, superfície de
+    desserialização mínima.
+  - CycloneDX 1.6 (constante única): compatibilidade ampla de consumidores;
+    1.7 disponível na lib se necessário.
+  - Escopo Maven no MVP: arquitetura de scanner plugável para pip/npm/cargo
+    no futuro, sem overengineering agora.
+  - Empacotamento: shade fat jar (java -jar) + cyclonedx-maven-plugin gerando
+    o SBOM RESOLVIDO do próprio projeto (target/bom.json — grafo completo
+    com transitivas; complementa o SBOM declarado do attest: dois SBOMs,
+    duas verdades, cada um honesto sobre o que mede).
+
+11. SUPPLY CHAIN DO PRÓPRIO SBOMGUARD
+=====================================
+
+  A ferramenta é ela própria um alvo. Práticas gravadas no repositório:
+  versões pinadas com data de verificação (pom.xml), .gitignore bloqueando
+  material de chave desde o dia 1, workflows de CI com gate de atestação do
+  próprio projeto (dogfooding: .github/workflows/attest.yml), e o SBOM
+  resolvido gerado a cada build. A verificação dos downloads do build
+  (HTTPS + checksums do Maven Central) protege contra corrupção em
+  trânsito, não contra um repositório comprometido — verificação PGP das
+  dependências está listada como evolução, não como promessa.
+
+================================================================================
+ Para operar a ferramenta (sem ler código): GUIA_USO.txt
+================================================================================

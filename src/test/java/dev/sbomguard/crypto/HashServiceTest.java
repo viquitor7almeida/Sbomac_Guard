@@ -36,8 +36,7 @@ class HashServiceTest {
 
     @Test
     void vetorNistExatamenteUmBloco() {
-        // 56 bytes = 448 bits: preenche um bloco de 512 bits; o padding força
-        // o processamento de um segundo bloco (fronteira de bloco do SHA-256)
+
         String entrada = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
         assertEquals(
                 "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
@@ -92,9 +91,7 @@ class HashServiceTest {
                 hexDistintos++;
             }
         }
-        // Avalanche é por BIT (~50% dos 256 bits). Um dígito hex só coincide se
-        // os 4 bits dele coincidirem (p = 1/16) → esperado ~60/64 dígitos distintos.
-        // Piso 48 detecta degenerescência (função que "quase não espalha").
+
         assertTrue(hexDistintos > 48,
                 "avalanche esperava ~60/64 dígitos distintos, obtido " + hexDistintos);
     }

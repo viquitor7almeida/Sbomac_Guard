@@ -8,13 +8,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
-/**
- * Integridade de artefatos via SHA-256, usando exclusivamente o JDK.
- *
- * Cada chamada cria seu próprio MessageDigest (que NÃO é thread-safe),
- * portanto os métodos são thread-safe por construção, sem sincronização.
- * Hashing sempre em stream: memória constante independente do tamanho do arquivo.
- */
 public final class HashService {
 
     private static final int CHUNK_SIZE_BYTES = 8 * 1024;

@@ -1,0 +1,171 @@
+================================================================================
+ SBOMGUARD — GUIA DE USO
+ Ferramenta de segurança de cadeia de suprimentos: instala, gere o atestado,
+ assine, verifique. Simples e objetivo.
+================================================================================
+
+1. PARA QUE SERVE
+=================
+
+O SBOMGuard fotografa o estado de um projeto (dependências Maven declaradas,
+poms, artefatos JAR/WAR/EAR), gera o SBOM (padrão CycloneDX) e um MANIFESTO
+de integridade com hashes SHA-256 de tudo o que foi medido, ASSINA o manifesto
+com Ed25519 e depois VERIFICA — de forma reproduzível e offline — se o que
+está no projeto continua exatamente igual ao que foi atestado. Feito para
+ser gate de pipeline: verificação reprovada = build bloqueado.
+
+O que ele faz: detecta ALTERAÇÃO (dependência injetada, artefato trocado,
+pom adulterado, manifesto/assinatura/ledger adulterados).
+O que ele NÃO faz: detectar malware. Um componente malicioso registrado
+antes do ataque verifica com sucesso. Ele atesta estado, não intenção.
+
+2. REQUISITOS E INSTALAÇÃO
+==========================
+
+  JDK 21 e Maven 3.9+.
+
+  git clone <url-do-repositorio> && cd sbomguard
+  mvn verify                      (builda, roda os 145 testes e empacota)
+  java -jar target/sbomguard-0.1.0-SNAPSHOT.jar --help
+
+  A partir daqui, "sbomguard" no texto = java -jar target/sbomguard-0.1.0-SNAPSHOT.jar
+
+3. O FLUXO EM 5 PASSOS
+======================
+
+  Passo 1 — Gere o par de chaves (uma vez por projeto):
+      sbomguard keygen --out-dir .
+    Cria: sbomguard-signing.pem (PRIVADA — nunca commite) e
+    sbomguard-signing.pub (pública — committável).
+
+  Passo 2 — Ateste o projeto:
+      sbomguard attest .
+    Escaneia, gera e grava sbomguard.sbom.json e sbomguard.manifest.json
+    na raiz do projeto. O output mostra o sha256 do manifesto.
+
+  Passo 3 — Assine o manifesto:
+      sbomguard sign sbomguard.manifest.json --key sbomguard-signing.pem
+    Cria sbomguard.manifest.json.sig e registra a entrada no ledger
+    (sbomguard.ledger.jsonl).
+
+  Passo 4 — Verifique (o gate):
+      sbomguard verify sbomguard.manifest.json --key sbomguard-signing.pub
+    Assinatura + integridade completa. Exit 0 = aprovado; 10/11/12/13 =
+    violação (ver tabela de códigos).
+
+  Passo 5 — Ancore o ledger (checkpoint público):
+      sbomguard anchor . --key sbomguard-signing.pem
+    Cria sbomguard.anchor.json. PUBlique-a fora do repositório (release,
+    repo de auditoria) e guarde-a — é ela que detecta reescrita/deleção do
+    ledger. Para verificar contra a âncora:
+      sbomguard ledger . --verify --anchor sbomguard.anchor.json --key sbomguard-signing.pub
+
+  Dia a dia: passos 2 a 4. Depois de qualquer mudança LEGÍTIMA no projeto,
+  re-attest e re-sign (o ledger acumula o histórico).
+
+4. COMANDOS — REFERÊNCIA RÁPIDA
+===============================
+
+  sbomguard keygen [--out-dir DIR]            Gera chaves Ed25519 + fingerprint.
+                                             Default do dir: atual.
+  sbomguard hash ARQUIVO [ARQUIVO...]         SHA-256 em formato compatível
+                                             com sha256sum (dá pipe em
+                                             "sha256sum -c").
+  sbomguard scan DIRETÓRIO                    Inventário: dependências Maven
+                                             declaradas, poms, JAR/WAR/EAR.
+                                             Não hasheia nada — só lista.
+  sbomguard sbom DIRETÓRIO [-o ARQUIVO]       Gera SBOM CycloneDX 1.6 (JSON).
+                                             Sem -o: imprime no stdout.
+  sbomguard attest DIRETÓRIO [--output-dir DIR]
+                                             SBOM + manifesto de integridade
+                                             com hashes (saída default: raiz
+                                             do próprio projeto).
+  sbomguard sign MANIFESTO --key PRIVADA [--public-key PUB] [--ledger ARQUIVO]
+                                             Assina (grava .sig) e anota no
+                                             ledger. A pública é assumida ao
+                                             lado da privada: mesmo nome com
+                                             sufixo .pub.
+  sbomguard verify MANIFESTO --key PÚBLICA [--project DIRETÓRIO]
+                                             GATE: assinatura + integridade.
+                                             Default do projeto: diretório
+                                             onde vive o manifesto.
+  sbomguard ledger [CAMINHO] [--verify] [--anchor ARQUIVO --key PÚBLICA]
+                                             Lista entradas ou verifica a
+                                             cadeia; com --anchor, verifica
+                                             contra o checkpoint publicado.
+  sbomguard anchor [CAMINHO] --key PRIVADA [--out ARQUIVO]
+                                             Cria a âncora assinada do ledger.
+
+5. ARQUIVOS GERADOS (todos lado a lado, na raiz do projeto por default)
+=======================================================================
+
+  sbomguard-signing.pem         chave PRIVADA (permissão 0600). NUNCA commite.
+  sbomguard-signing.pub         chave pública. Committe — verificadores usam.
+  sbomguard.sbom.json           o SBOM (CycloneDX 1.6).
+  sbomguard.manifest.json       o atestado: sujeito, referência ao SBOM
+                                (com hash), componentes com hashes.
+  sbomguard.manifest.json.sig   assinatura Ed25519 do manifesto (envelope
+                                autodescritivo com algoritmo e keyId).
+  sbomguard.ledger.jsonl        histórico append-only de atestados (hash
+                                chaining).
+  sbomguard.anchor.json         checkpoint assinado (head + contagem) para
+                                publicar FORA do repositório.
+
+  Commitar ou não: SBOM, manifesto, .sig, ledger e .pub sim (proveniência
+  versionada); .pem jamais (o .gitignore já bloqueia *.pem).
+
+6. CÓDIGOS DE SAÍDA (o contrato com o CI)
+=========================================
+
+  0   Sucesso / verificação aprovada
+  1   Erro da ferramenta (chave ruim, IO)          -> investigar a ferramenta
+  2   Argumento inválido                          -> corrigir o comando
+  10  INTEGRIDADE comprometida                     -> BLOQUEAR o build
+  11  ASSINATURA inválida ou ausente              -> BLOQUEAR o build
+  12  Dependência/componente INESPERADO           -> BLOQUEAR o build
+  13  Manifesto não encontrado                    -> BLOQUEAR o build
+
+  1-2 = a ferramenta falhou. 10-13 = a ferramenta FUNCIONOU e achou problema.
+  Numa esteira: exit != 0 quebra o pipeline; exit 10-12 merece investigação
+  de segurança, não retry.
+
+7. CUIDADOS COM CHAVES (3 regras)
+=================================
+
+  1. A privada (.pem) nunca sai da sua máquina/segredo — nunca no git
+     (o .gitignore bloqueia), nunca no terminal.
+  2. A pública (.pub) circula: committe-a e pine-a no verificador/CI.
+  3. Chave privada comprometida = atacante assina o que quiser e a
+     ferramenta NÃO detecta (a assinatura seria perfeita). Resposta:
+     rotacionar a chave e registrar a troca (o ledger guarda o keyId de
+     cada entrada — o histórico da rotação é auditável).
+
+8. EM CI/CD
+===========
+
+  O repositório traz workflows prontos (.github/workflows/):
+    ci.yml      — build e testes a cada push/PR;
+    attest.yml  — o gate completo: build -> attest -> sign -> verify ->
+                  ledger -> âncora -> upload dos artefatos de proveniência.
+  A pipeline quebra automaticamente quando verify/ledger falham (é só o exit
+  code propagando). Nota de segurança: a chave em GitHub secrets é exposta
+  ao runner durante o uso; para identidade contínua prefira assinatura fora
+  do runner (KMS/OIDC — evolução listada) ou aceite chaves efêmeras por run
+  (o padrão do workflow de demonstração).
+
+9. LIMITAÇÕES (leia antes de confiar)
+=====================================
+
+  - Lê dependências DECLARADAS no pom.xml (versão por propriedade fica crua;
+    transitivas não aparecem no atestado). Evolução: grafo resolvido.
+  - Não confere artefatos contra o registro público (Maven Central): a
+    verificação é sobre o estado LOCAL vs o atestado. Evolução: hash upstream.
+  - A âncora só é forte quanto a fonte onde você a publica: a ferramenta
+    valida a assinatura dela, não de onde você a baixou.
+  - Não detecta malware nem chave privada comprometida (impossível por
+    dentro do modelo — rotacione e audite o ledger).
+  - Ambiente 100% comprometido (runner que mente) está fora de alcance.
+
+================================================================================
+ Compreensão profunda do código, criptografia e decisões: GUIA_TECNICO.txt
+================================================================================

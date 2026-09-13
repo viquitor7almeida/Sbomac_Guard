@@ -8,30 +8,24 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import dev.sbomguard.scanner.Component.ComponentType;
 
-/**
- * Orquestra a descoberta: walk do diretório + parsing de cada pom encontrado.
- *
- * Contratos de saída:
- * - component.path é sempre RELATIVO à raiz (manifestos portáveis e
- *   reproduzíveis — caminhos absolutos embutem máquina, caminhos relativos não);
- * - ScanResult.root é a raiz NORMALIZADA absoluta (para re-resolver na verificação);
- * - ordem determinística: PROJECT_POMs por caminho, dependências deduplicadas
- *   por purl em ordem de declaração, artefatos de arquivo por caminho;
- * - pom malformado NÃO aborta o scan: é pulado e reportado em pomErrors
- *   (política de inventário; hard-fail pertence à verificação, não à descoberta);
- * - pomFound = pelo menos um pom parseado com sucesso.
- *
- * Deduplicação por purl: módulos que declaram a mesma dependência geram UM
- * componente (o SBOM espera componentes únicos). Nota: dependências que
- * diferem só por classifier colapsam — limitação documentada do MVP.
- */
 public final class ProjectScanner {
 
     public record ScanResult(Path root, List<Component> components, List<Path> skippedSymlinks,
                              boolean pomFound, List<String> pomErrors) {
+
+        public Optional<Component> subject() {
+            return components().stream()
+                    .filter(c -> c.type() == ComponentType.PROJECT_POM)
+                    .filter(c -> c.path() != null && c.path().getNameCount() == 1)
+                    .findFirst()
+                    .or(() -> components().stream()
+                            .filter(c -> c.type() == ComponentType.PROJECT_POM)
+                            .findFirst());
+        }
     }
 
     public ScanResult scan(Path projectRoot) throws IOException {

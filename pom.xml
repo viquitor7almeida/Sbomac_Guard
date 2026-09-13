@@ -18,7 +18,6 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>21</maven.compiler.release>
 
-    <!-- Versões PINADAS e verificadas no Maven Central em 2026-09-10 -->
     <picocli.version>4.7.7</picocli.version>
     <jackson-bom.version>2.22.2</jackson-bom.version>
     <cyclonedx-core-java.version>13.2.0</cyclonedx-core-java.version>
@@ -28,11 +27,12 @@
 
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
+    <maven-shade-plugin.version>3.6.2</maven-shade-plugin.version>
+    <cyclonedx-maven-plugin.version>2.9.3</cyclonedx-maven-plugin.version>
   </properties>
 
   <dependencyManagement>
     <dependencies>
-      <!-- BOMs: uma única fonte de verdade para famílias de artefatos -->
       <dependency>
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
@@ -51,44 +51,35 @@
   </dependencyManagement>
 
   <dependencies>
-    <!-- FASE 1: framework CLI (zero dependências transitivas) -->
     <dependency>
       <groupId>info.picocli</groupId>
       <artifactId>picocli</artifactId>
       <version>${picocli.version}</version>
     </dependency>
 
-    <!-- FASE 3: leitura de pom.xml de projetos escaneados (MavenXpp3Reader) -->
     <dependency>
       <groupId>org.apache.maven</groupId>
       <artifactId>maven-model</artifactId>
       <version>${maven-model.version}</version>
     </dependency>
 
-    <!-- FASE 3: purl (pkg:maven/...) — direta porque usamos direto (já era transitiva do cyclonedx) -->
     <dependency>
       <groupId>com.github.package-url</groupId>
       <artifactId>packageurl-java</artifactId>
       <version>${packageurl-java.version}</version>
     </dependency>
 
-    <!-- FASE 4: geração e validação por schema de SBOMs CycloneDX (OWASP) -->
     <dependency>
       <groupId>org.cyclonedx</groupId>
       <artifactId>cyclonedx-core-java</artifactId>
       <version>${cyclonedx-core-java.version}</version>
     </dependency>
 
-    <!-- FASE 5: serialização JSON do manifesto de integridade -->
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
     </dependency>
 
-    <!-- FASE 2/6: criptografia SEM dependências externas.
-         SHA-256 (MessageDigest) e Ed25519 (KeyPairGenerator/Signature) são nativos do JDK. -->
-
-    <!-- Testes (não embarcam no artefato final) -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -107,6 +98,58 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>${maven-surefire-plugin.version}</version>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>${maven-shade-plugin.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>dev.sbomguard.SbomGuardCli</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.cyclonedx</groupId>
+        <artifactId>cyclonedx-maven-plugin</artifactId>
+        <version>${cyclonedx-maven-plugin.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>makeBom</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <schemaVersion>1.6</schemaVersion>
+          <outputFormat>json</outputFormat>
+        </configuration>
       </plugin>
     </plugins>
   </build>

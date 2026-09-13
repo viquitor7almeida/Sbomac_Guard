@@ -1,9 +1,15 @@
 package dev.sbomguard;
 
+import dev.sbomguard.cli.AnchorCommand;
+import dev.sbomguard.cli.AttestCommand;
 import dev.sbomguard.cli.ExitCodes;
 import dev.sbomguard.cli.HashCommand;
+import dev.sbomguard.cli.KeygenCommand;
+import dev.sbomguard.cli.LedgerCommand;
 import dev.sbomguard.cli.SbomCommand;
 import dev.sbomguard.cli.ScanCommand;
+import dev.sbomguard.cli.SignCommand;
+import dev.sbomguard.cli.VerifyCommand;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -14,13 +20,16 @@ import java.util.concurrent.Callable;
 @Command(
         name = "sbomguard",
         mixinStandardHelpOptions = true,
-        version = SbomGuardCli.VERSION,
-        subcommands = { HashCommand.class, ScanCommand.class, SbomCommand.class },
+        version = "sbomguard " + SbomGuardCli.VERSION,
+        subcommands = {
+                HashCommand.class, ScanCommand.class, SbomCommand.class, AttestCommand.class,
+                KeygenCommand.class, SignCommand.class, VerifyCommand.class, LedgerCommand.class,
+                AnchorCommand.class },
         description = "Segurança de cadeia de suprimentos: SBOM (CycloneDX), manifesto de integridade, assinatura Ed25519 e verificação para CI/CD."
 )
 public class SbomGuardCli implements Callable<Integer> {
 
-    static final String VERSION = "sbomguard 0.1.0-SNAPSHOT";
+    public static final String VERSION = "0.1.0-SNAPSHOT";
 
     @Spec
     CommandSpec spec;
@@ -29,10 +38,6 @@ public class SbomGuardCli implements Callable<Integer> {
         System.exit(configuredCommandLine().execute(args));
     }
 
-    /**
-     * Fábrica única de configuração: usada por main() E pelos testes,
-     * garantindo que os testes exercitem exatamente o caminho de produção.
-     */
     static CommandLine configuredCommandLine() {
         return new CommandLine(new SbomGuardCli())
                 .setParameterExceptionHandler(SbomGuardCli::reportInvalidArgument)

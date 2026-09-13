@@ -1,12 +1,11 @@
 package dev.sbomguard.testkit;
 
+import java.io.IOException;
 import java.net.URISyntaxException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 
-/**
- * Acesso a fixtures de teste (src/test/resources/fixtures) para os testes
- * das diversas fases — uma única forma de resolver Path a partir de recurso.
- */
 public final class Fixtures {
 
     public static Path path(String nomeRelativo) {
@@ -15,6 +14,23 @@ public final class Fixtures {
         } catch (URISyntaxException e) {
             throw new IllegalStateException("fixture inacessível: " + nomeRelativo, e);
         }
+    }
+
+    public static Path copy(String nome, Path destinoDir) throws IOException {
+        Path origem = path(nome);
+        Path destino = destinoDir.resolve(nome);
+        try (Stream<Path> arquivos = Files.walk(origem)) {
+            for (Path arquivo : arquivos.toList()) {
+                Path alvo = destino.resolve(origem.relativize(arquivo).toString());
+                if (Files.isDirectory(arquivo)) {
+                    Files.createDirectories(alvo);
+                } else {
+                    Files.createDirectories(alvo.getParent());
+                    Files.copy(arquivo, alvo);
+                }
+            }
+        }
+        return destino;
     }
 
     private Fixtures() {

@@ -16,15 +16,6 @@ import java.util.List;
 
 import dev.sbomguard.scanner.Component.ComponentType;
 
-/**
- * Extrai componentes de um pom.xml com o mesmo parser do Maven (Xpp3, modo
- * strict: XML malformado dispara exceção, não silêncio).
- *
- * Lê o pom DECLARADO: não resolve propriedades (${...}), dependencyManagement,
- * BOMs, perfis nem dependências transitivas — limitação documentada do MVP.
- * Versões com placeholder ficam cruas no campo version e o purl é gerado SEM
- * versão (não fabricamos dado que não existe).
- */
 public final class MavenPomScanner {
 
     public List<Component> scan(Path pomXml) {

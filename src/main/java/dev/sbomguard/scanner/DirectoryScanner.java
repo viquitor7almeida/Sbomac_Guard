@@ -12,18 +12,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/**
- * Varredura de diretório coletando pom.xml e artefatos (jar/war/ear).
- *
- * Política de symlink: NUNCA seguir — symlink é pulado e reportado. Um link
- * para fora do projeto não vira item de inventário (sem leak de conteúdo
- * externo, sem loops).
- *
- * Exclusões default (diretórios): .git, target, .idea, .vscode, node_modules.
- *
- * Saída sempre ordenada por caminho — determinismo: dois scans do mesmo
- * projeto produzem a mesma lista, independentemente da ordem do filesystem.
- */
 public final class DirectoryScanner {
 
     private static final Set<String> EXCLUDED_DIRS = Set.of(".git", "target", ".idea", ".vscode", "node_modules");

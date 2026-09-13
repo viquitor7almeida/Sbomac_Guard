@@ -20,29 +20,12 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Materializa um ScanResult como SBOM CycloneDX (JSON), spec 1.6.
- *
- * Regras de honestidade:
- * - hash SHA-256 SOMENTE em artefatos de arquivo medidos localmente (HashService,
- *   F2); dependência declarada nunca recebe hash inventado;
- * - sem grafo de dependências fabricado (declarado ≠ resolvido — limitação MVP);
- * - serialNumber/timestamp carregam PROVENIÊNCIA (quando/por qual instância foi
- *   gerado): propositalmente variam por execução. Reprodutibilidade de
- *   VERIFICAÇÃO vem do manifesto (F5) comparar o hash do ARQUIVO gerado, não de
- *   regenerar.
- *
- * O sujeito do SBOM (metadata.component) é o pom da raiz; na ausência dele,
- * o primeiro pom por ordem de caminho; sem nenhum pom, sem metadata.
- * O sujeito não se repete na lista de components (convenção CycloneDX).
- */
 public final class SbomGenerator {
 
-    /** 1.6: compatibilidade ampla de consumidores (1.7 disponível na lib se quisermos). */
     public static final Version SPEC_VERSION = Version.VERSION_16;
 
     public Bom generate(ScanResult scan, UUID serialNumber) throws IOException {
-        Component subject = subjectOrNull(scan);
+        Component subject = scan.subject().orElse(null);
 
         Bom bom = new Bom();
         bom.setSerialNumber("urn:uuid:" + serialNumber);
@@ -65,20 +48,8 @@ public final class SbomGenerator {
         return BomGeneratorFactory.createJson(SPEC_VERSION, bom).toJsonString();
     }
 
-    /** Valida contra o schema oficial CycloneDX embutido na lib. Vazio = válido. */
     public List<ParseException> validate(String json) throws IOException {
         return new JsonParser().validate(json.getBytes(StandardCharsets.UTF_8), SPEC_VERSION);
-    }
-
-    private Component subjectOrNull(ScanResult scan) {
-        return scan.components().stream()
-                .filter(c -> c.type() == Component.ComponentType.PROJECT_POM)
-                .filter(c -> c.path() != null && c.path().getNameCount() == 1)
-                .findFirst()
-                .orElseGet(() -> scan.components().stream()
-                        .filter(c -> c.type() == Component.ComponentType.PROJECT_POM)
-                        .findFirst()
-                        .orElse(null));
     }
 
     private org.cyclonedx.model.Component toCycloneDx(Component c, ScanResult scan) throws IOException {
@@ -119,7 +90,6 @@ public final class SbomGenerator {
         };
     }
 
-    /** Placeholder de propriedade (${...}) não é versão: o SBOM omite em vez de propagar ruído. */
     private String versaoEfetiva(String version) {
         return (version == null || version.isBlank() || version.startsWith("${")) ? null : version;
     }
