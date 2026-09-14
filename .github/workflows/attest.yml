@@ -20,26 +20,31 @@ jobs:
       - name: Build, testes e empacotamento (fat jar + SBOM resolvido)
         run: mvn -B -ntp verify
 
+      - name: Instala o comando (dogfood do installer a cada run)
+        run: |
+          ./install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Chaves Ed25519 efêmeras de CI
-        run: java -jar target/sbomguard-0.1.0-SNAPSHOT.jar keygen --out-dir /tmp/keys
+        run: sbomguard keygen --out-dir /tmp/keys
 
       - name: Attest do próprio SBOMGuard (dogfooding)
-        run: java -jar target/sbomguard-0.1.0-SNAPSHOT.jar attest . --output-dir dist
+        run: sbomguard attest . --output-dir dist
 
       - name: Assina o manifesto de integridade
-        run: java -jar target/sbomguard-0.1.0-SNAPSHOT.jar sign dist/sbomguard.manifest.json --key /tmp/keys/sbomguard-signing.pem
+        run: sbomguard sign dist/sbomguard.manifest.json --key /tmp/keys/sbomguard-signing.pem
 
       - name: GATE - verify (exit != 0 quebra o pipeline)
-        run: java -jar target/sbomguard-0.1.0-SNAPSHOT.jar verify dist/sbomguard.manifest.json --key /tmp/keys/sbomguard-signing.pub --project .
+        run: sbomguard verify dist/sbomguard.manifest.json --key /tmp/keys/sbomguard-signing.pub --project .
 
       - name: GATE - ledger íntegro
-        run: java -jar target/sbomguard-0.1.0-SNAPSHOT.jar ledger dist --verify
+        run: sbomguard ledger dist --verify
 
       - name: Âncora do ledger (checkpoint assinado para publicação externa)
-        run: java -jar target/sbomguard-0.1.0-SNAPSHOT.jar anchor dist --key /tmp/keys/sbomguard-signing.pem
+        run: sbomguard anchor dist --key /tmp/keys/sbomguard-signing.pem
 
       - name: GATE - ledger conforme a âncora
-        run: java -jar target/sbomguard-0.1.0-SNAPSHOT.jar ledger dist --verify --anchor dist/sbomguard.anchor.json --key /tmp/keys/sbomguard-signing.pub
+        run: sbomguard ledger dist --verify --anchor dist/sbomguard.anchor.json --key /tmp/keys/sbomguard-signing.pub
 
       - name: Artefatos de proveniência
         uses: actions/upload-artifact@v7

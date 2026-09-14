@@ -44,20 +44,23 @@ Fluxo de uso:
 
 ## Instalação
 
-Pré-requisitos: JDK 21 (LTS), Maven 3.9+.
+Pré-requisitos: JDK 21 (LTS), Maven 3.9+. Linux ou macOS.
 
 ```bash
 git clone <url-do-repositorio> sbomguard
 cd sbomguard
-mvn verify
+./install.sh
 ```
 
-Executar em desenvolvimento:
+O installer builda se necessário (rodando os testes antes de instalar), cria o
+comando `sbomguard` em `~/.local/bin` e cuida do PATH. Abra um terminal novo:
 
 ```bash
-mvn -q dependency:build-classpath -Dmdep.outputFile=target/cp.txt
-java -cp "target/classes:$(cat target/cp.txt)" dev.sbomguard.SbomGuardCli --help
+sbomguard --help        # funciona de qualquer diretório
 ```
+
+Atualizar a versão instalada: `mvn -q package && ./install.sh`
+Desinstalar: `./install.sh --uninstall`
 
 ## Códigos de saída
 

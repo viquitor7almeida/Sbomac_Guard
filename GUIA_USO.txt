@@ -22,13 +22,27 @@ antes do ataque verifica com sucesso. Ele atesta estado, não intenção.
 2. REQUISITOS E INSTALAÇÃO
 ==========================
 
-  JDK 21 e Maven 3.9+.
+  JDK 21 e Maven 3.9+. Linux ou macOS.
 
   git clone <url-do-repositorio> && cd sbomguard
-  mvn verify                      (builda, roda os 145 testes e empacota)
-  java -jar target/sbomguard-0.1.0-SNAPSHOT.jar --help
+  ./install.sh
 
-  A partir daqui, "sbomguard" no texto = java -jar target/sbomguard-0.1.0-SNAPSHOT.jar
+  O installer builda se necessário (roda os 145 testes antes de instalar),
+  copia o jar para ~/.local/share/sbomguard/, cria o comando em
+  ~/.local/bin/ e cuida do PATH (zsh e bash detectados; idempotente —
+  re-rodar atualiza a versão). Abra um terminal novo e:
+
+  sbomguard --help             (funciona de qualquer diretório)
+
+  Atualizar a versão instalada após mudanças no código:
+      mvn -q package && ./install.sh
+
+  Desinstalar:
+      ./install.sh --uninstall
+
+  Sem instalar (uso direto do build):
+      java -jar target/sbomguard-0.1.0-SNAPSHOT.jar --help
+      (é isto que "sbomguard" significa no texto abaixo, até você instalar)
 
 3. O FLUXO EM 5 PASSOS
 ======================
